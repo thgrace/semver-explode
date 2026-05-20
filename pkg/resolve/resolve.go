@@ -2,10 +2,14 @@ package resolve
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
 )
+
+var ErrVersionNotFound = errors.New("version not found")
 
 type SortOrder int
 
@@ -64,4 +68,23 @@ func Resolve(ctx context.Context, eco ecosystem.Ecosystem, pkg, rangeStr string,
 	})
 
 	return out, nil
+}
+
+func ResolveExact(ctx context.Context, eco ecosystem.Ecosystem, pkg, versionStr string) (ecosystem.Version, error) {
+	parsed, err := eco.ParseVersion(versionStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse version %q: %w", versionStr, err)
+	}
+
+	all, err := eco.Registry().ListVersions(ctx, pkg)
+	if err != nil {
+		return nil, fmt.Errorf("list versions for %q: %w", pkg, err)
+	}
+
+	for _, v := range all {
+		if v.Compare(parsed) == 0 {
+			return v, nil
+		}
+	}
+	return nil, ErrVersionNotFound
 }
