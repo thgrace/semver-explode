@@ -8,10 +8,14 @@ func TestParseVersionRoundTrip(t *testing.T) {
 	}{
 		{"1.2.3", "1.2.3"},
 		{"v1.2.3", "1.2.3"},
-		{"V1.2.3", "1.2.3"},
 		{"1.2.3-alpha.1+build.7", "1.2.3-alpha.1+build.7"},
 		{"0.0.0", "0.0.0"},
 		{"10.20.30-rc.1", "10.20.30-rc.1"},
+		{"1.2.3-0", "1.2.3-0"},
+		{"1.0.0-x-y-z", "1.0.0-x-y-z"},
+		{"1.2.3+001", "1.2.3+001"},
+		{"1.2.3+0.0", "1.2.3+0.0"},
+		{"1.2.3+build.7", "1.2.3+build.7"},
 	}
 	for _, tc := range cases {
 		v, err := ParseVersion(tc.in)
@@ -82,6 +86,15 @@ func TestParseVersionErrors(t *testing.T) {
 		"01.2.3",
 		"1.2.3-α",
 		"abc",
+		"V1.2.3",
+		"vv1.2.3",
+		"1.2.3-",
+		"1.2.3+",
+		"1.2.3-a.",
+		"1.2.3-a..b",
+		"1.2.3+a.",
+		"1.2.3+a..b",
+		"1.2.3-+build",
 	}
 	for _, s := range bad {
 		if _, err := ParseVersion(s); err == nil {

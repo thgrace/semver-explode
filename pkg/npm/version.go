@@ -22,20 +22,26 @@ type Version struct {
 var _ ecosystem.Version = Version{}
 
 // ParseVersion parses s as a strict semver 2.0.0 version, tolerating a single
-// leading 'v' or 'V' and surrounding whitespace (matching node-semver's loose
+// leading 'v' and surrounding whitespace (matching node-semver's loose
 // parsing for that one prefix).
 func ParseVersion(s string) (Version, error) {
 	raw := strings.TrimSpace(s)
 	if raw == "" {
 		return Version{}, fmt.Errorf("npm: empty version")
 	}
-	if raw[0] == 'v' || raw[0] == 'V' {
+	if raw[0] == 'v' {
 		raw = raw[1:]
 	}
 
-	core, pre, build, err := splitVersion(raw)
+	core, pre, build, hasPre, hasBuild, err := splitVersion(raw)
 	if err != nil {
 		return Version{}, err
+	}
+	if hasPre && pre == "" {
+		return Version{}, fmt.Errorf("npm: empty prerelease in %q", s)
+	}
+	if hasBuild && build == "" {
+		return Version{}, fmt.Errorf("npm: empty build in %q", s)
 	}
 
 	parts := strings.Split(core, ".")
@@ -73,20 +79,22 @@ func ParseVersion(s string) (Version, error) {
 }
 
 // splitVersion separates "1.2.3-pre+build" into ("1.2.3", "pre", "build").
-func splitVersion(raw string) (core, pre, build string, err error) {
+func splitVersion(raw string) (core, pre, build string, hasPre, hasBuild bool, err error) {
 	core = raw
 	if i := strings.IndexByte(raw, '+'); i >= 0 {
 		core = raw[:i]
 		build = raw[i+1:]
+		hasBuild = true
 	}
 	if i := strings.IndexByte(core, '-'); i >= 0 {
 		pre = core[i+1:]
 		core = core[:i]
+		hasPre = true
 	}
 	if core == "" {
-		return "", "", "", fmt.Errorf("npm: missing version core in %q", raw)
+		return "", "", "", false, false, fmt.Errorf("npm: missing version core in %q", raw)
 	}
-	return core, pre, build, nil
+	return core, pre, build, hasPre, hasBuild, nil
 }
 
 func parseNumeric(s string) (uint64, error) {

@@ -11,7 +11,6 @@ type op = ecosystem.Op
 
 const (
 	opEQ = ecosystem.OpEQ
-	opNE = ecosystem.OpNE
 	opLT = ecosystem.OpLT
 	opLE = ecosystem.OpLE
 	opGT = ecosystem.OpGT
@@ -36,7 +35,7 @@ type Range struct {
 var _ ecosystem.Range = Range{}
 
 // ParseRange parses a node-semver range expression. Supported forms include
-// exact versions, comparator operators (>, >=, <, <=, =, !=), partial versions,
+// exact versions, comparator operators (>, >=, <, <=, =), partial versions,
 // X-ranges, tilde and caret ranges, hyphen ranges, and OR-combined branches.
 func ParseRange(s string) (Range, error) {
 	raw := s
@@ -146,7 +145,7 @@ func tryHyphenRange(br string) ([]comparator, bool, error) {
 }
 
 // tokenize splits a branch on whitespace, but re-glues a bare operator
-// (>, >=, <, <=, =, !=) onto the following token.
+// (>, >=, <, <=, =) onto the following token.
 func tokenize(br string) ([]string, error) {
 	fields := strings.Fields(br)
 	out := make([]string, 0, len(fields))
@@ -169,7 +168,7 @@ func tokenize(br string) ([]string, error) {
 
 func isBareOp(s string) bool {
 	switch s {
-	case ">", ">=", "<", "<=", "=", "!=":
+	case ">", ">=", "<", "<=", "=":
 		return true
 	}
 	return false
@@ -189,9 +188,10 @@ func parseComparator(tok string) ([]comparator, error) {
 	case '^':
 		return parseCaret(tok[1:])
 	case '~':
-		// Tolerate "~>" as plain "~" (some ecosystems write it; node-semver
-		// accepts the bare tilde — we accept the "~" prefix only).
-		return parseTilde(strings.TrimPrefix(tok[1:], ">"))
+		if strings.HasPrefix(tok, "~>") {
+			return nil, fmt.Errorf("npm: malformed tilde range %q", tok)
+		}
+		return parseTilde(tok[1:])
 	}
 
 	op, rest := splitOp(tok)
@@ -224,8 +224,6 @@ func splitOp(tok string) (op, string) {
 		return opGE, strings.TrimSpace(tok[2:])
 	case strings.HasPrefix(tok, "<="):
 		return opLE, strings.TrimSpace(tok[2:])
-	case strings.HasPrefix(tok, "!="):
-		return opNE, strings.TrimSpace(tok[2:])
 	case strings.HasPrefix(tok, ">"):
 		return opGT, strings.TrimSpace(tok[1:])
 	case strings.HasPrefix(tok, "<"):
@@ -281,13 +279,22 @@ func parsePartial(s string) (Version, int, error) {
 
 	core := s
 	var preStr, buildStr string
+	var hasPre, hasBuild bool
 	if i := strings.IndexByte(core, '+'); i >= 0 {
 		buildStr = core[i+1:]
 		core = core[:i]
+		hasBuild = true
 	}
 	if i := strings.IndexByte(core, '-'); i >= 0 {
 		preStr = core[i+1:]
 		core = core[:i]
+		hasPre = true
+	}
+	if hasPre && preStr == "" {
+		return Version{}, 0, fmt.Errorf("empty prerelease in %q", s)
+	}
+	if hasBuild && buildStr == "" {
+		return Version{}, 0, fmt.Errorf("empty build in %q", s)
 	}
 
 	parts := strings.Split(core, ".")
@@ -300,7 +307,10 @@ func parsePartial(s string) (Version, int, error) {
 	wildSeen := false
 	nums := []*uint64{&v.Major, &v.Minor, &v.Patch}
 	for i, p := range parts {
-		if p == "" || isWildcardComponent(p) {
+		if p == "" {
+			return Version{}, 0, fmt.Errorf("empty component in %q", s)
+		}
+		if isWildcardComponent(p) {
 			wildSeen = true
 			continue
 		}
@@ -378,11 +388,6 @@ func expandPartial(op op, pv Version, parts int, raw string) ([]comparator, erro
 		case 3:
 			return []comparator{{op: opLE, ver: pv}}, nil
 		}
-	case opNE:
-		if parts == 3 {
-			return []comparator{{op: opNE, ver: pv}}, nil
-		}
-		return nil, fmt.Errorf("npm: != requires a full version, got %q", raw)
 	}
 	return nil, fmt.Errorf("npm: cannot expand partial %q", raw)
 }
