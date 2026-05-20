@@ -12,9 +12,8 @@ import (
 // across per-ecosystem packages. V must satisfy ecosystem.Version.
 type DepsDevRegistry[V Version] struct {
 	Client *depsdev.Client
-	System string             // e.g. "npm", "pypi"
+	System string // e.g. "npm", "pypi"
 	Parse  func(string) (V, error)
-	Less   func(a, b V) bool // ecosystem sort order
 }
 
 // ListVersions fetches all versions of pkg from deps.dev, skips unparseable
@@ -39,11 +38,23 @@ func (r *DepsDevRegistry[V]) ListVersions(ctx context.Context, pkg string) ([]Ve
 		return nil, fmt.Errorf("%s: no parseable versions for %q (%d skipped)", r.System, pkg, skipped)
 	}
 
-	sort.Slice(out, func(i, j int) bool { return r.Less(out[i], out[j]) })
+	sort.Slice(out, func(i, j int) bool { return out[i].Compare(out[j]) < 0 })
 
 	res := make([]Version, len(out))
 	for i, v := range out {
 		res[i] = v
 	}
 	return res, nil
+}
+
+// NewDepsDevRegistry returns a DepsDevRegistry backed by the default
+// deps.dev client. Prefer this over constructing DepsDevRegistry directly.
+func NewDepsDevRegistry[V Version](system string, parse func(string) (V, error)) *DepsDevRegistry[V] {
+	return NewDepsDevRegistryWithClient(system, parse, depsdev.New())
+}
+
+// NewDepsDevRegistryWithClient returns a DepsDevRegistry using the provided
+// client. Useful in tests where a custom or mock client is needed.
+func NewDepsDevRegistryWithClient[V Version](system string, parse func(string) (V, error), c *depsdev.Client) *DepsDevRegistry[V] {
+	return &DepsDevRegistry[V]{Client: c, System: system, Parse: parse}
 }

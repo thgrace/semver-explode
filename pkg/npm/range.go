@@ -7,16 +7,20 @@ import (
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
 )
 
-type op int
+type op = ecosystem.Op
 
 const (
-	opAny op = iota
-	opEQ
-	opNE
-	opLT
-	opLE
-	opGT
-	opGE
+	opEQ = ecosystem.OpEQ
+	opNE = ecosystem.OpNE
+	opLT = ecosystem.OpLT
+	opLE = ecosystem.OpLE
+	opGT = ecosystem.OpGT
+	opGE = ecosystem.OpGE
+)
+
+// npm-specific ops, numbered outside the shared range.
+const (
+	opAny op = 100 + iota
 )
 
 type comparator struct {
@@ -511,20 +515,8 @@ func compMatches(c comparator, v Version) bool {
 	switch c.op {
 	case opAny:
 		return true
-	case opEQ:
-		return v.cmp(c.ver) == 0
-	case opNE:
-		return v.cmp(c.ver) != 0
-	case opLT:
-		return v.cmp(c.ver) < 0
-	case opLE:
-		return v.cmp(c.ver) <= 0
-	case opGT:
-		return v.cmp(c.ver) > 0
-	case opGE:
-		return v.cmp(c.ver) >= 0
 	}
-	return false
+	return ecosystem.MatchOrdered(c.op, v.cmp(c.ver))
 }
 
 func (r Range) String() string {

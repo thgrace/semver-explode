@@ -33,3 +33,7 @@ func (p *Pypi) ParseRange(s string) (ecosystem.Range, error) {
 }
 
 func (p *Pypi) Registry() ecosystem.Registry { return p.reg }
+
+func init() {
+	ecosystem.Register("pypi", func() ecosystem.Ecosystem { return New() })
+}

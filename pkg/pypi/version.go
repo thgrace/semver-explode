@@ -1,6 +1,7 @@
 package pypi
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -220,16 +221,12 @@ func (v Version) IsPrerelease() bool {
 
 // Compare returns -1, 0, or +1. Panics if other is not a pypi.Version.
 func (v Version) Compare(other ecosystem.Version) int {
-	o, ok := other.(Version)
-	if !ok {
-		panic(fmt.Sprintf("pypi: cannot compare pypi.Version with %T", other))
-	}
-	return v.cmp(o)
+	return v.cmp(ecosystem.AssertType[Version]("pypi", other))
 }
 
 // cmp implements the PEP 440 _cmpkey ordering.
 func (v Version) cmp(o Version) int {
-	if c := cmpInt(v.Epoch, o.Epoch); c != 0 {
+	if c := cmp.Compare(v.Epoch, o.Epoch); c != 0 {
 		return c
 	}
 	if c := cmpRelease(v.Release, o.Release); c != 0 {
@@ -264,7 +261,7 @@ func cmpRelease(a, b []int) int {
 		if i < len(b) {
 			bv = b[i]
 		}
-		if c := cmpInt(av, bv); c != 0 {
+		if c := cmp.Compare(av, bv); c != 0 {
 			return c
 		}
 	}
@@ -325,15 +322,15 @@ func preKeyOf(v Version) preKey {
 
 func cmpTristate(a, b preKey) int {
 	if a.kind != b.kind {
-		return cmpInt(a.kind, b.kind)
+		return cmp.Compare(a.kind, b.kind)
 	}
 	if a.kind != 0 {
 		return 0 // both neginf or both inf
 	}
-	if c := cmpInt(a.labelOrd, b.labelOrd); c != 0 {
+	if c := cmp.Compare(a.labelOrd, b.labelOrd); c != 0 {
 		return c
 	}
-	return cmpInt(a.n, b.n)
+	return cmp.Compare(a.n, b.n)
 }
 
 // cmpPostKey: no post → NegativeInfinity; post present → ("post", N).
@@ -341,9 +338,9 @@ func cmpPostKey(v, o Version) int {
 	av := postKeyOf(v)
 	bv := postKeyOf(o)
 	if av[0] != bv[0] {
-		return cmpInt(av[0], bv[0])
+		return cmp.Compare(av[0], bv[0])
 	}
-	return cmpInt(av[1], bv[1])
+	return cmp.Compare(av[1], bv[1])
 }
 
 func postKeyOf(v Version) [2]int {
@@ -358,9 +355,9 @@ func cmpDevKey(v, o Version) int {
 	av := devKeyOf(v)
 	bv := devKeyOf(o)
 	if av[0] != bv[0] {
-		return cmpInt(av[0], bv[0])
+		return cmp.Compare(av[0], bv[0])
 	}
-	return cmpInt(av[1], bv[1])
+	return cmp.Compare(av[1], bv[1])
 }
 
 func devKeyOf(v Version) [2]int {
@@ -391,29 +388,18 @@ func cmpLocalKey(a, b []localSegment) int {
 			return c
 		}
 	}
-	return cmpInt(len(a), len(b))
+	return cmp.Compare(len(a), len(b))
 }
 
 func cmpLocalSeg(a, b localSegment) int {
 	switch {
 	case a.IsNum && b.IsNum:
-		return cmpInt(a.Num, b.Num)
+		return cmp.Compare(a.Num, b.Num)
 	case a.IsNum: // numeric > alpha
 		return 1
 	case b.IsNum:
 		return -1
 	default:
 		return strings.Compare(a.Str, b.Str)
-	}
-}
-
-func cmpInt(a, b int) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
 	}
 }

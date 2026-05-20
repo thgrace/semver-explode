@@ -2,24 +2,29 @@ package pypi
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
 )
 
-type op int
+type op = ecosystem.Op
 
 const (
-	opEQ  op = iota // == (exact, with local-stripping rule)
-	opNE            // !=
-	opLT            // <
-	opLE            // <=
-	opGT            // >
-	opGE            // >=
-	opCom           // ~= compatible release
-	opArb           // === arbitrary string equality
-	opEQW           // ==X.* prefix wildcard
-	opNEW           // !=X.* negated prefix wildcard
+	opEQ = ecosystem.OpEQ // == (exact, with local-stripping rule)
+	opNE = ecosystem.OpNE // !=
+	opLT = ecosystem.OpLT // <
+	opLE = ecosystem.OpLE // <=
+	opGT = ecosystem.OpGT // >
+	opGE = ecosystem.OpGE // >=
+)
+
+// pypi-specific ops, numbered outside the shared range.
+const (
+	opCom op = 100 + iota // ~= compatible release
+	opArb                 // === arbitrary string equality
+	opEQW                 // ==X.* prefix wildcard
+	opNEW                 // !=X.* negated prefix wildcard
 )
 
 type comparator struct {
@@ -147,8 +152,8 @@ func parseWildcardPrefix(s string) ([]int, error) {
 	parts := strings.Split(s, ".")
 	prefix := make([]int, 0, len(parts))
 	for _, p := range parts {
-		var n int
-		if _, err := fmt.Sscanf(p, "%d", &n); err != nil {
+		n, err := strconv.Atoi(p)
+		if err != nil {
 			return nil, fmt.Errorf("non-numeric segment %q", p)
 		}
 		prefix = append(prefix, n)
@@ -198,6 +203,13 @@ func (r Range) Contains(v ecosystem.Version) bool {
 	return true
 }
 
+// compMatches does NOT delegate to ecosystem.MatchOrdered for the six shared
+// ops, because PEP 440 assigns non-trivial semantics to four of them:
+//   - opEQ / opNE strip the candidate's local version when the constraint has none
+//   - opLT / opGT exclude any version sharing the constraint's release tuple
+//
+// Only opLE and opGE use plain sign-based comparison. We share the Op vocabulary
+// (via ecosystem.Op constants) but not the match logic.
 func compMatches(c comparator, v Version) bool {
 	switch c.op {
 	case opEQ:
