@@ -130,7 +130,7 @@ func Parse(s string) (PURL, error) {
 			if v == "" {
 				continue
 			}
-			decV, err := url.QueryUnescape(v)
+			decV, err := url.PathUnescape(v)
 			if err != nil {
 				return PURL{}, fmt.Errorf("purl: malformed percent-encoding in qualifier value: %w", err)
 			}

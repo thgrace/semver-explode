@@ -36,18 +36,11 @@ examples:
 `, strings.Join(ecosystem.Names(), ", "))
 }
 
-type mode interface{ isMode() }
-
-type rangeMode struct{ expr string }
-type pinMode struct{ version string }
-
-func (rangeMode) isMode() {}
-func (pinMode) isMode()   {}
-
 type request struct {
-	ecoName string
-	pkgName string
-	mode    mode
+	ecoName    string
+	pkgName    string
+	rangeExpr  string
+	pinVersion string
 }
 
 func parseRequest(args []string) (request, error) {
@@ -82,13 +75,13 @@ func parseRequest(args []string) (request, error) {
 			if p.Version == "" {
 				return request{}, fmt.Errorf("purl has no @version; provide a range argument or pin a version with @version")
 			}
-			return request{ecoName: ecoName, pkgName: pkgName, mode: pinMode{version: p.Version}}, nil
+			return request{ecoName: ecoName, pkgName: pkgName, pinVersion: p.Version}, nil
 		case 2:
 			rangeExpr := args[1]
 			if p.Version != "" {
 				return request{}, fmt.Errorf("version pin and range both given")
 			}
-			return request{ecoName: ecoName, pkgName: pkgName, mode: rangeMode{expr: rangeExpr}}, nil
+			return request{ecoName: ecoName, pkgName: pkgName, rangeExpr: rangeExpr}, nil
 		default:
 			return request{}, fmt.Errorf("too many arguments")
 		}
@@ -99,7 +92,7 @@ func parseRequest(args []string) (request, error) {
 	}
 
 	if len(args) == 3 {
-		return request{ecoName: args[0], pkgName: args[1], mode: rangeMode{expr: args[2]}}, nil
+		return request{ecoName: args[0], pkgName: args[1], rangeExpr: args[2]}, nil
 	}
 
 	return request{}, fmt.Errorf("expected 3 arguments, got %d", len(args))
@@ -136,9 +129,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (e
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	switch m := req.mode.(type) {
-	case rangeMode:
-		rng, err := eco.ParseRange(m.expr)
+	if req.rangeExpr != "" {
+		rng, err := eco.ParseRange(req.rangeExpr)
 		if err != nil {
 			return fmt.Errorf("parse range: %w", err)
 		}
@@ -151,11 +143,11 @@ func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (e
 				fmt.Fprintln(stdout, v.String())
 			}
 		}
-	case pinMode:
-		v, err := resolve.ResolveExact(ctx, eco, req.pkgName, m.version)
+	} else {
+		v, err := resolve.ResolveExact(ctx, eco, req.pkgName, req.pinVersion)
 		if err != nil {
 			if errors.Is(err, resolve.ErrVersionNotFound) {
-				return fmt.Errorf("version %q not found for package %q", m.version, req.pkgName)
+				return fmt.Errorf("version %q not found for package %q", req.pinVersion, req.pkgName)
 			}
 			return err
 		}
@@ -163,12 +155,4 @@ func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (e
 	}
 
 	return nil
-}
-
-func lookupEcosystem(name string) (ecosystem.Ecosystem, error) {
-	eco, ok := ecosystem.Lookup(name)
-	if !ok {
-		return nil, fmt.Errorf("unknown ecosystem %q (supported: %s)", name, strings.Join(ecosystem.Names(), ", "))
-	}
-	return eco, nil
 }

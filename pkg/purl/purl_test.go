@@ -75,6 +75,16 @@ var successCases = []successCase{
 	},
 }
 
+func TestParse_QualifierPlusLiteral(t *testing.T) {
+	p, err := Parse("pkg:npm/lodash?vcs_url=git+https://example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := p.Qualifiers["vcs_url"]; got != "git+https://example.com" {
+		t.Errorf("vcs_url = %q, want %q", got, "git+https://example.com")
+	}
+}
+
 func TestParse_Success(t *testing.T) {
 	for _, tc := range successCases {
 		t.Run(tc.input, func(t *testing.T) {

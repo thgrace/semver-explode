@@ -8,13 +8,14 @@ import (
 	"testing"
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
+	"github.com/thgrace/semver-explode/pkg/resolve"
 )
 
 // fakeVersion is a minimal ecosystem.Version for testing.
 type fakeVersion struct{ s string }
 
-func (v fakeVersion) String() string               { return v.s }
-func (v fakeVersion) IsPrerelease() bool           { return false }
+func (v fakeVersion) String() string     { return v.s }
+func (v fakeVersion) IsPrerelease() bool { return false }
 func (v fakeVersion) Compare(other ecosystem.Version) int {
 	o := other.(fakeVersion)
 	if v.s < o.s {
@@ -82,44 +83,40 @@ func TestParseRequest(t *testing.T) {
 		args    []string
 		wantErr string
 		// zero values mean "don't check"
-		wantEco  string
-		wantPkg  string
-		wantMode string // "range" or "pin"
-		wantExpr string // range expr or pin version
+		wantEco        string
+		wantPkg        string
+		wantRangeExpr  string
+		wantPinVersion string
 	}
 
 	cases := []tc{
 		{
-			name:     "legacy 3-arg",
-			args:     []string{"npm", "lodash", "^4.17.0"},
-			wantEco:  "npm",
-			wantPkg:  "lodash",
-			wantMode: "range",
-			wantExpr: "^4.17.0",
+			name:          "legacy 3-arg",
+			args:          []string{"npm", "lodash", "^4.17.0"},
+			wantEco:       "npm",
+			wantPkg:       "lodash",
+			wantRangeExpr: "^4.17.0",
 		},
 		{
-			name:     "purl no version with range arg",
-			args:     []string{"pkg:npm/lodash", "^4.17.0"},
-			wantEco:  "npm",
-			wantPkg:  "lodash",
-			wantMode: "range",
-			wantExpr: "^4.17.0",
+			name:          "purl no version with range arg",
+			args:          []string{"pkg:npm/lodash", "^4.17.0"},
+			wantEco:       "npm",
+			wantPkg:       "lodash",
+			wantRangeExpr: "^4.17.0",
 		},
 		{
-			name:     "purl with @version pin",
-			args:     []string{"pkg:npm/lodash@4.17.21"},
-			wantEco:  "npm",
-			wantPkg:  "lodash",
-			wantMode: "pin",
-			wantExpr: "4.17.21",
+			name:           "purl with @version pin",
+			args:           []string{"pkg:npm/lodash@4.17.21"},
+			wantEco:        "npm",
+			wantPkg:        "lodash",
+			wantPinVersion: "4.17.21",
 		},
 		{
-			name:     "purl pypi pin",
-			args:     []string{"pkg:pypi/Django@4.2"},
-			wantEco:  "pypi",
-			wantPkg:  "django",
-			wantMode: "pin",
-			wantExpr: "4.2",
+			name:           "purl pypi pin",
+			args:           []string{"pkg:pypi/Django@4.2"},
+			wantEco:        "pypi",
+			wantPkg:        "django",
+			wantPinVersion: "4.2",
 		},
 		{
 			name:    "purl with @version and extra range arg",
@@ -194,23 +191,11 @@ func TestParseRequest(t *testing.T) {
 			if tc.wantPkg != "" && req.pkgName != tc.wantPkg {
 				t.Errorf("pkgName: got %q, want %q", req.pkgName, tc.wantPkg)
 			}
-			switch tc.wantMode {
-			case "range":
-				rm, ok := req.mode.(rangeMode)
-				if !ok {
-					t.Fatalf("mode: got %T, want rangeMode", req.mode)
-				}
-				if tc.wantExpr != "" && rm.expr != tc.wantExpr {
-					t.Errorf("rangeMode.expr: got %q, want %q", rm.expr, tc.wantExpr)
-				}
-			case "pin":
-				pm, ok := req.mode.(pinMode)
-				if !ok {
-					t.Fatalf("mode: got %T, want pinMode", req.mode)
-				}
-				if tc.wantExpr != "" && pm.version != tc.wantExpr {
-					t.Errorf("pinMode.version: got %q, want %q", pm.version, tc.wantExpr)
-				}
+			if tc.wantRangeExpr != "" && req.rangeExpr != tc.wantRangeExpr {
+				t.Errorf("rangeExpr: got %q, want %q", req.rangeExpr, tc.wantRangeExpr)
+			}
+			if tc.wantPinVersion != "" && req.pinVersion != tc.wantPinVersion {
+				t.Errorf("pinVersion: got %q, want %q", req.pinVersion, tc.wantPinVersion)
 			}
 		})
 	}
@@ -329,17 +314,18 @@ func TestRunWithDeps_VersionFlag(t *testing.T) {
 	}
 }
 
-// Sentinel check: ErrVersionNotFound must be wrapped, not replaced.
-func TestRunWithDeps_PinMode_ErrorWrapsErrVersionNotFound(t *testing.T) {
+// CLI translates ErrVersionNotFound into a user-facing message and does NOT wrap it.
+func TestRunWithDeps_PinMode_VersionNotFound(t *testing.T) {
 	m, _ := newFakeSetup()
 	var stdout, stderr bytes.Buffer
 	err := runWithDeps([]string{"pkg:npm/lodash@9.9.9"}, &stdout, &stderr, fakeLookup(m))
-	// The public sentinel should NOT be unwrappable from runWithDeps since we
-	// convert it to a user-friendly message; verify it is a non-nil plain error.
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if errors.Is(err, errors.New("anything")) {
-		t.Fatal("unexpected sentinel match")
+	if errors.Is(err, resolve.ErrVersionNotFound) {
+		t.Fatal("runWithDeps must not wrap ErrVersionNotFound; got unwrappable sentinel")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error %q should contain user-facing 'not found' message", err.Error())
 	}
 }
