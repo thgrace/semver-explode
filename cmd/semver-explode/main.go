@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -10,20 +12,97 @@ import (
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
 	_ "github.com/thgrace/semver-explode/pkg/ecosystem/all"
+	"github.com/thgrace/semver-explode/pkg/purl"
+	"github.com/thgrace/semver-explode/pkg/resolve"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=..."
 var Version = "dev"
 
 func usageString() string {
-	return fmt.Sprintf(`usage: semver-explode <ecosystem> <package> <range>
+	return fmt.Sprintf(`usage:
+  semver-explode <ecosystem> <package> <range>
+  semver-explode <purl> <range>
+  semver-explode <purl>              (purl must contain @version)
 
 ecosystems: %s
 
-example:
+examples:
   semver-explode npm lodash '^4.17.0'
   semver-explode pypi requests '>=2.30,<3'
+  semver-explode 'pkg:npm/lodash' '^4.17.0'
+  semver-explode 'pkg:npm/lodash@4.17.21'
+  semver-explode 'pkg:pypi/Django@4.2'
 `, strings.Join(ecosystem.Names(), ", "))
+}
+
+type mode interface{ isMode() }
+
+type rangeMode struct{ expr string }
+type pinMode struct{ version string }
+
+func (rangeMode) isMode() {}
+func (pinMode) isMode()   {}
+
+type request struct {
+	ecoName string
+	pkgName string
+	mode    mode
+}
+
+func parseRequest(args []string) (request, error) {
+	if len(args) == 0 {
+		return request{}, fmt.Errorf("expected arguments, got 0")
+	}
+
+	// Pre-check any non-first arg for vers: prefix.
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "vers:") {
+			return request{}, fmt.Errorf("vers: range syntax not yet supported")
+		}
+	}
+
+	first := args[0]
+
+	if strings.HasPrefix(first, "pkg:") {
+		p, err := purl.Parse(first)
+		if err != nil {
+			return request{}, err
+		}
+		ecoName := p.Ecosystem()
+		if ecoName == "" {
+			return request{}, fmt.Errorf("unsupported purl type %q", p.Type)
+		}
+		pkgName, err := p.PackageName()
+		if err != nil {
+			return request{}, err
+		}
+		switch len(args) {
+		case 1:
+			if p.Version == "" {
+				return request{}, fmt.Errorf("purl has no @version; provide a range argument or pin a version with @version")
+			}
+			return request{ecoName: ecoName, pkgName: pkgName, mode: pinMode{version: p.Version}}, nil
+		case 2:
+			rangeExpr := args[1]
+			if p.Version != "" {
+				return request{}, fmt.Errorf("version pin and range both given")
+			}
+			return request{ecoName: ecoName, pkgName: pkgName, mode: rangeMode{expr: rangeExpr}}, nil
+		default:
+			return request{}, fmt.Errorf("too many arguments")
+		}
+	}
+
+	if strings.HasPrefix(first, "vers:") {
+		return request{}, fmt.Errorf("vers: range syntax not yet supported")
+	}
+
+	if len(args) == 3 {
+		return request{ecoName: args[0], pkgName: args[1], mode: rangeMode{expr: args[2]}}, nil
+	}
+
+	return request{}, fmt.Errorf("expected 3 arguments, got %d", len(args))
 }
 
 func main() {
@@ -34,39 +113,55 @@ func main() {
 }
 
 func run(args []string) error {
+	return runWithDeps(args, os.Stdout, os.Stderr, ecosystem.Lookup)
+}
+
+func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (ecosystem.Ecosystem, bool)) error {
 	if len(args) == 1 && (args[0] == "-v" || args[0] == "--version") {
-		fmt.Println(Version)
+		fmt.Fprintln(stdout, Version)
 		return nil
 	}
-	if len(args) != 3 {
-		fmt.Fprint(os.Stderr, usageString())
-		return fmt.Errorf("expected 3 arguments, got %d", len(args))
-	}
-	ecoName, pkgName, rangeExpr := args[0], args[1], args[2]
 
-	eco, err := lookupEcosystem(ecoName)
+	req, err := parseRequest(args)
 	if err != nil {
+		fmt.Fprint(stderr, usageString())
 		return err
 	}
 
-	rng, err := eco.ParseRange(rangeExpr)
-	if err != nil {
-		return fmt.Errorf("parse range: %w", err)
+	eco, ok := lookup(req.ecoName)
+	if !ok {
+		return fmt.Errorf("unknown ecosystem %q (supported: %s)", req.ecoName, strings.Join(ecosystem.Names(), ", "))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	versions, err := eco.Registry().ListVersions(ctx, pkgName)
-	if err != nil {
-		return err
+	switch m := req.mode.(type) {
+	case rangeMode:
+		rng, err := eco.ParseRange(m.expr)
+		if err != nil {
+			return fmt.Errorf("parse range: %w", err)
+		}
+		versions, err := eco.Registry().ListVersions(ctx, req.pkgName)
+		if err != nil {
+			return err
+		}
+		for _, v := range versions {
+			if rng.Contains(v) {
+				fmt.Fprintln(stdout, v.String())
+			}
+		}
+	case pinMode:
+		v, err := resolve.ResolveExact(ctx, eco, req.pkgName, m.version)
+		if err != nil {
+			if errors.Is(err, resolve.ErrVersionNotFound) {
+				return fmt.Errorf("version %q not found for package %q", m.version, req.pkgName)
+			}
+			return err
+		}
+		fmt.Fprintln(stdout, v.String())
 	}
 
-	for _, v := range versions {
-		if rng.Contains(v) {
-			fmt.Println(v.String())
-		}
-	}
 	return nil
 }
 
