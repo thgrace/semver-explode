@@ -2,7 +2,6 @@ package pypi
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
@@ -30,8 +29,13 @@ const (
 type comparator struct {
 	op     op
 	ver    Version
-	prefix []int  // release prefix for opEQW / opNEW
-	rawVer string // for opArb (normalized String())
+	prefix versionPrefix // epoch + release prefix for opEQW / opNEW
+	rawVer string        // for opArb (case-folded raw string)
+}
+
+type versionPrefix struct {
+	epoch   int
+	release []int
 }
 
 // Range holds a parsed PEP 440 specifier set; AND semantics across all specifiers.
@@ -92,13 +96,14 @@ func parseSpecifier(s string) (comparator, error) {
 		}
 	}
 
-	// Arbitrary string equality: normalize and store.
+	// Arbitrary equality (===) does raw, case-folded string comparison.
+	// We do NOT require the RHS to be a valid PEP 440 version, so unparseable
+	// strings like "===foobar" are accepted. We still probe it as a Version so
+	// that "===1.0a1" can opt the set into prerelease candidates (mirroring
+	// packaging.specifiers.Specifier.prereleases for the === operator); the
+	// probe failure is non-fatal and contributes a zero Version.
 	if o == opArb {
-		v, err := ParseVersion(rest)
-		if err != nil {
-			return comparator{}, fmt.Errorf("pypi: bad version in %q: %w", s, err)
-		}
-		return comparator{op: opArb, rawVer: v.String()}, nil
+		return comparator{op: opArb, rawVer: asciiFold(rest), ver: prereleaseProbe(rest)}, nil
 	}
 
 	// ~= requires at least two release segments.
@@ -110,12 +115,18 @@ func parseSpecifier(s string) (comparator, error) {
 		if len(v.Release) < 2 {
 			return comparator{}, fmt.Errorf("pypi: ~= requires at least two release segments in %q", s)
 		}
+		if len(v.Local) > 0 {
+			return comparator{}, fmt.Errorf("pypi: local versions are not permitted in %q", s)
+		}
 		return comparator{op: opCom, ver: v}, nil
 	}
 
 	v, err := ParseVersion(rest)
 	if err != nil {
 		return comparator{}, fmt.Errorf("pypi: bad version in %q: %w", s, err)
+	}
+	if (o == opLT || o == opLE || o == opGT || o == opGE) && len(v.Local) > 0 {
+		return comparator{}, fmt.Errorf("pypi: local versions are not permitted in %q", s)
 	}
 	return comparator{op: o, ver: v}, nil
 }
@@ -142,37 +153,56 @@ func splitOp(s string) (op, string, error) {
 	return 0, "", fmt.Errorf("pypi: unrecognized operator in specifier %q", s)
 }
 
-// parseWildcardPrefix parses the release part before ".*" (e.g. "1.4" → [1,4]).
-func parseWildcardPrefix(s string) ([]int, error) {
+// parseWildcardPrefix parses the release part before ".*" (for example
+// "1!1.4" becomes epoch 1 and release prefix [1,4]).
+func parseWildcardPrefix(s string) (versionPrefix, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil, fmt.Errorf("empty prefix")
+		return versionPrefix{}, fmt.Errorf("empty prefix")
 	}
-	// Allow optional epoch prefix (e.g. "1!1.4.*")
-	parts := strings.Split(s, ".")
-	prefix := make([]int, 0, len(parts))
-	for _, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			return nil, fmt.Errorf("non-numeric segment %q", p)
-		}
-		prefix = append(prefix, n)
+	v, err := ParseVersion(s)
+	if err != nil {
+		return versionPrefix{}, err
 	}
-	return prefix, nil
+	if v.Pre != nil || v.Post != nil || v.Dev != nil || len(v.Local) > 0 {
+		return versionPrefix{}, fmt.Errorf("prefix wildcard must use only epoch and release segments")
+	}
+	return versionPrefix{epoch: v.Epoch, release: v.Release}, nil
 }
 
-// setAllowsPrereleases returns true when any specifier explicitly involves a
-// prerelease: either a constraint version that is a prerelease, or a wildcard
-// ==X.* / !=X.* specifier (which by PEP 440 matches pre/post/dev releases too).
+// prereleaseProbe tries to parse s as a Version; on failure returns a zero
+// Version. Used only to determine whether a === spec opts the set into
+// prerelease candidates; it never gates the actual === string match.
+func prereleaseProbe(s string) Version {
+	v, err := ParseVersion(s)
+	if err != nil {
+		return Version{}
+	}
+	return v
+}
+
+func asciiFold(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if 'A' <= ch && ch <= 'Z' {
+			ch += 'a' - 'A'
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
+}
+
+// setAllowsPrereleases returns true when any specifier explicitly names a
+// prerelease. Prefix wildcards (==X.*) do not opt in by themselves because
+// their stored prefix is always a plain release tuple. For === we consult
+// the parse-probe result so "===1.0a1" can opt the set into prereleases
+// (mirroring packaging.specifiers.Specifier.prereleases).
 func setAllowsPrereleases(comps []comparator) bool {
 	for _, c := range comps {
 		switch c.op {
-		case opEQW:
-			// ==X.* explicitly includes pre-releases of the prefix
-			return true
-		case opNEW, opArb:
-			continue
-		default:
+		case opEQ, opLT, opLE, opGT, opGE, opCom, opArb:
 			if c.ver.IsPrerelease() {
 				return true
 			}
@@ -189,7 +219,7 @@ func setAllowsPrereleases(comps []comparator) bool {
 func (r Range) Contains(v ecosystem.Version) bool {
 	pv, ok := v.(Version)
 	if !ok {
-		return false
+		return r.containsArbitrary(v)
 	}
 	// Empty set matches everything except prereleases (per packaging semantics).
 	if pv.IsPrerelease() && !setAllowsPrereleases(r.comps) {
@@ -197,6 +227,21 @@ func (r Range) Contains(v ecosystem.Version) bool {
 	}
 	for _, c := range r.comps {
 		if !compMatches(c, pv) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r Range) containsArbitrary(v ecosystem.Version) bool {
+	if len(r.comps) == 0 {
+		return false
+	}
+	if v.IsPrerelease() && !setAllowsPrereleases(r.comps) {
+		return false
+	}
+	for _, c := range r.comps {
+		if c.op != opArb || asciiFold(v.String()) != c.rawVer {
 			return false
 		}
 	}
@@ -227,7 +272,7 @@ func compMatches(c comparator, v Version) bool {
 	case opCom:
 		return comMatches(c.ver, v)
 	case opArb:
-		return v.String() == c.rawVer
+		return asciiFold(v.String()) == c.rawVer
 	case opEQW:
 		return prefixMatches(c.prefix, v)
 	case opNEW:
@@ -248,23 +293,46 @@ func eqMatches(constraint, candidate Version) bool {
 	return candidate.cmp(constraint) == 0
 }
 
-// ltMatches implements < exclusive bound: excludes any version whose release
-// tuple equals the constraint's, including pre/post/dev of that release.
-// Per PEP 440 §5.6, <V excludes V itself and all pre/post/dev of V's release.
+// ltMatches implements < exclusive bound, mirroring packaging.specifiers
+// _compare_less_than: candidate < constraint, and if the constraint itself is
+// not a prerelease, also exclude prereleases that share its release tuple
+// (so "<1.0" excludes "1.0a1"). When the constraint IS a prerelease, no such
+// exclusion applies: "<1.0a2" matches "1.0a1".
 func ltMatches(constraint, candidate Version) bool {
-	if sameRelease(constraint, candidate) {
+	if candidate.cmp(constraint) >= 0 {
 		return false
 	}
-	return candidate.cmp(constraint) < 0
+	if !constraint.IsPrerelease() && candidate.IsPrerelease() {
+		if sameRelease(constraint, candidate) {
+			return false
+		}
+	}
+	return true
 }
 
-// gtMatches implements > exclusive bound: excludes any version whose release
-// tuple equals the constraint's release tuple (including pre/post/dev of it).
+// gtMatches implements > exclusive bound, mirroring packaging.specifiers
+// _compare_greater_than: candidate > constraint, plus two same-release
+// exclusions when the constraint is a plain release:
+//   - postreleases of the same release ("1.0.post1" is not > "1.0")
+//   - local versions of the same release ("1.0+local" is not > "1.0")
+//
+// When the constraint itself is a postrelease ("1.0.post1"), postreleases of
+// the same release ARE allowed as long as they compare greater.
 func gtMatches(constraint, candidate Version) bool {
-	if sameRelease(constraint, candidate) {
+	if candidate.cmp(constraint) <= 0 {
 		return false
 	}
-	return candidate.cmp(constraint) > 0
+	if constraint.Post == nil && candidate.Post != nil {
+		if sameRelease(constraint, candidate) {
+			return false
+		}
+	}
+	if len(candidate.Local) > 0 {
+		if sameRelease(constraint, candidate) {
+			return false
+		}
+	}
+	return true
 }
 
 // sameRelease returns true when a and b share the same epoch and release tuple.
@@ -275,30 +343,33 @@ func sameRelease(a, b Version) bool {
 	return cmpRelease(a.Release, b.Release) == 0
 }
 
-// comMatches implements ~= (compatible release): ~=X.Y ≡ >=X.Y, ==X.*
-// ~=X.Y.Z ≡ >=X.Y.Z, ==X.Y.*  (prefix is all segments except the last)
+// comMatches implements ~= (compatible release): ~=X.Y is equivalent to
+// >=X.Y, ==X.*; ~=X.Y.Z is equivalent to >=X.Y.Z, ==X.Y.*. The prefix is all
+// release segments except the last, preserving trailing zeros to control width.
 func comMatches(constraint, candidate Version) bool {
 	if candidate.cmp(constraint) < 0 {
 		return false
 	}
-	prefix := constraint.Release[:len(constraint.Release)-1]
+	prefix := versionPrefix{
+		epoch:   constraint.Epoch,
+		release: constraint.Release[:len(constraint.Release)-1],
+	}
 	return prefixMatches(prefix, candidate)
 }
 
-// prefixMatches checks that the candidate's release starts with the given prefix.
-// Pre/post/dev/local are ignored — only release segments are compared.
-func prefixMatches(prefix []int, candidate Version) bool {
-	rel := stripTrailingZeros(candidate.Release)
-	pfx := stripTrailingZeros(prefix)
-	// prefix must not be longer than the candidate's release
-	if len(pfx) > len(rel) {
-		// pad rel with zeros up to prefix length
-		padded := make([]int, len(pfx))
-		copy(padded, rel)
-		rel = padded
+// prefixMatches checks that the candidate has the same epoch and release
+// prefix. Pre/post/dev/local are ignored; candidate release segments are
+// zero-padded as needed, but the prefix width is preserved.
+func prefixMatches(prefix versionPrefix, candidate Version) bool {
+	if candidate.Epoch != prefix.epoch {
+		return false
 	}
-	for i, p := range pfx {
-		if rel[i] != p {
+	for i, p := range prefix.release {
+		got := 0
+		if i < len(candidate.Release) {
+			got = candidate.Release[i]
+		}
+		if got != p {
 			return false
 		}
 	}

@@ -54,6 +54,19 @@ func TestParseVersionSuccess(t *testing.T) {
 		{"1.0a", "1.0a0"},
 		// preserve release tuple length
 		{"1.0.0", "1.0.0"},
+		// Implicit post/dev numbers default to 0 (matches packaging.version).
+		{"1.0.post", "1.0.post0"},
+		{"1.0.dev", "1.0.dev0"},
+		// Leading zeros stripped in pre/post/dev numbers and epoch
+		// (strconv.Atoi normalizes; matches packaging.version).
+		{"1.0a01", "1.0a1"},
+		{"1.0.post01", "1.0.post1"},
+		{"1.0.dev01", "1.0.dev1"}, // task brief said dev0; packaging strips to dev1
+		{"01!1.0", "1!1.0"},
+		// Epoch 0 is omitted from canonical form.
+		{"0!1.0", "1.0"},
+		// Local underscore separator normalized to dot.
+		{"1.0+ubuntu_1", "1.0+ubuntu.1"},
 	}
 	for _, tc := range cases {
 		v, err := ParseVersion(tc.in)
@@ -79,6 +92,16 @@ func TestParseVersionFailure(t *testing.T) {
 		"!1.0",
 		"abc",
 		"1.0+a..b",
+		// Local label must not begin or end with a separator.
+		"1.0+_abc",
+		"1.0+abc_",
+		// Component ordering: dev must come after pre, not before.
+		"1.0.dev1a1",
+		// A version may have at most one post component.
+		"1.0.post1.post2",
+		// Whitespace inside the version string is not allowed
+		// (only edge whitespace is trimmed).
+		"1 .0",
 	}
 	for _, s := range bad {
 		if _, err := ParseVersion(s); err == nil {
