@@ -16,7 +16,6 @@ const (
 
 type config struct {
 	includePrereleases bool
-	includeYanked      bool
 	sort               SortOrder
 }
 
@@ -24,10 +23,6 @@ type Option func(*config)
 
 func IncludePrereleases(v bool) Option {
 	return func(c *config) { c.includePrereleases = v }
-}
-
-func IncludeYanked(v bool) Option {
-	return func(c *config) { c.includeYanked = v }
 }
 
 func Sort(order SortOrder) Option {

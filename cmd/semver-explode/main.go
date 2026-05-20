@@ -5,24 +5,26 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
-	"github.com/thgrace/semver-explode/pkg/npm"
-	"github.com/thgrace/semver-explode/pkg/pypi"
+	_ "github.com/thgrace/semver-explode/pkg/ecosystem/all"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=..."
 var Version = "dev"
 
-const usage = `usage: semver-explode <ecosystem> <package> <range>
+func usageString() string {
+	return fmt.Sprintf(`usage: semver-explode <ecosystem> <package> <range>
 
-ecosystems: npm, pypi
+ecosystems: %s
 
 example:
   semver-explode npm lodash '^4.17.0'
   semver-explode pypi requests '>=2.30,<3'
-`
+`, strings.Join(ecosystem.Names(), ", "))
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -37,7 +39,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) != 3 {
-		fmt.Fprint(os.Stderr, usage)
+		fmt.Fprint(os.Stderr, usageString())
 		return fmt.Errorf("expected 3 arguments, got %d", len(args))
 	}
 	ecoName, pkgName, rangeExpr := args[0], args[1], args[2]
@@ -69,12 +71,9 @@ func run(args []string) error {
 }
 
 func lookupEcosystem(name string) (ecosystem.Ecosystem, error) {
-	switch name {
-	case "npm":
-		return npm.New(), nil
-	case "pypi":
-		return pypi.New(), nil
-	default:
-		return nil, fmt.Errorf("unknown ecosystem %q (supported: npm, pypi)", name)
+	eco, ok := ecosystem.Lookup(name)
+	if !ok {
+		return nil, fmt.Errorf("unknown ecosystem %q (supported: %s)", name, strings.Join(ecosystem.Names(), ", "))
 	}
+	return eco, nil
 }

@@ -33,3 +33,7 @@ func (n *Npm) ParseRange(s string) (ecosystem.Range, error) {
 }
 
 func (n *Npm) Registry() ecosystem.Registry { return n.reg }
+
+func init() {
+	ecosystem.Register("npm", func() ecosystem.Ecosystem { return New() })
+}

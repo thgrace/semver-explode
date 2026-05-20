@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
@@ -157,35 +158,20 @@ func (v Version) IsPrerelease() bool {
 // ignored. The argument must be a npm.Version, otherwise Compare panics — the
 // ecosystem.Version interface is intentionally per-ecosystem.
 func (v Version) Compare(other ecosystem.Version) int {
-	o, ok := other.(Version)
-	if !ok {
-		panic(fmt.Sprintf("npm: cannot compare npm.Version with %T", other))
-	}
-	return v.cmp(o)
+	return v.cmp(ecosystem.AssertType[Version]("npm", other))
 }
 
 func (v Version) cmp(o Version) int {
-	if c := cmpUint(v.Major, o.Major); c != 0 {
+	if c := cmp.Compare(v.Major, o.Major); c != 0 {
 		return c
 	}
-	if c := cmpUint(v.Minor, o.Minor); c != 0 {
+	if c := cmp.Compare(v.Minor, o.Minor); c != 0 {
 		return c
 	}
-	if c := cmpUint(v.Patch, o.Patch); c != 0 {
+	if c := cmp.Compare(v.Patch, o.Patch); c != 0 {
 		return c
 	}
 	return comparePrerelease(v.Prerelease, o.Prerelease)
-}
-
-func cmpUint(a, b uint64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
-	}
 }
 
 // comparePrerelease implements semver 2.0 §11: a version without a prerelease
@@ -210,7 +196,7 @@ func comparePrerelease(a, b []string) int {
 			return c
 		}
 	}
-	return cmpInt(len(a), len(b))
+	return cmp.Compare(len(a), len(b))
 }
 
 func cmpIdent(a, b string) int {
@@ -218,7 +204,7 @@ func cmpIdent(a, b string) int {
 	bNum, bIsNum := identNumeric(b)
 	switch {
 	case aIsNum && bIsNum:
-		return cmpUint(aNum, bNum)
+		return cmp.Compare(aNum, bNum)
 	case aIsNum:
 		return -1
 	case bIsNum:
@@ -237,15 +223,4 @@ func identNumeric(s string) (uint64, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-func cmpInt(a, b int) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
-	}
 }

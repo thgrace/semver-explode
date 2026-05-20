@@ -32,11 +32,16 @@
 //
 // The registry must be backed by deps.dev; that is the shared resolution
 // backend for all ecosystems in this module.
+//
+// # Registration and import coupling
+//
+// Each ecosystem registers itself via init() when its package is imported.
+// Callers that use ecosystem.Lookup must blank-import the ecosystems they
+// want — or import pkg/ecosystem/all to register every implemented one.
 package ecosystem
 
 import (
 	"context"
-	"errors"
 )
 
 type Ecosystem interface {
@@ -60,5 +65,3 @@ type Range interface {
 type Registry interface {
 	ListVersions(ctx context.Context, pkg string) ([]Version, error)
 }
-
-var ErrNotImplemented = errors.New("not implemented")
