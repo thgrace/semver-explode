@@ -69,7 +69,6 @@ func Parse(s string) (Range, error) {
 		return Range{}, fmt.Errorf("vers: empty constraints")
 	}
 
-	typ = strings.ToLower(typ)
 	if !typeRe.MatchString(typ) {
 		return Range{}, fmt.Errorf("vers: invalid type %q", typ)
 	}
@@ -110,15 +109,6 @@ func Parse(s string) (Range, error) {
 		}
 	}
 
-	// Fix 7: use map[Constraint]bool (Constraint is comparable).
-	seen := map[Constraint]bool{}
-	for _, c := range parsed {
-		if seen[c] {
-			return Range{}, fmt.Errorf("vers: duplicate constraint %q", opString(c.Op)+c.Version)
-		}
-		seen[c] = true
-	}
-
 	return Range{Type: typ, Constraints: parsed}, nil
 }
 
@@ -154,17 +144,16 @@ func parseConstraint(s string) (Constraint, error) {
 		rest = s
 	}
 
+	if strings.ContainsAny(rest, "<>=!*|") {
+		return Constraint{}, fmt.Errorf("vers: malformed version literal %q (contains raw reserved characters)", rest)
+	}
+
 	decoded, err := url.PathUnescape(rest)
 	if err != nil {
 		return Constraint{}, fmt.Errorf("vers: malformed percent-encoding in version %q: %w", rest, err)
 	}
 	if decoded == "" {
 		return Constraint{}, fmt.Errorf("vers: empty version literal")
-	}
-
-	// Fix 4: reject version literals that contain comparator characters.
-	if strings.IndexAny(decoded, "<>=!") >= 0 {
-		return Constraint{}, fmt.Errorf("vers: malformed version literal %q (contains comparator characters)", decoded)
 	}
 
 	return Constraint{Op: op, Version: decoded}, nil
@@ -196,7 +185,7 @@ func (r Range) String() string {
 		if c.Op == Star {
 			parts = append(parts, "*")
 		} else {
-			parts = append(parts, opString(c.Op)+c.Version)
+			parts = append(parts, opString(c.Op)+encodeVersionLiteral(c.Version))
 		}
 	}
 	return "vers:" + r.Type + "/" + strings.Join(parts, "|")
@@ -241,6 +230,12 @@ func (r Range) Bind(eco ecosystem.Ecosystem) (ecosystem.Range, error) {
 		}
 		return sorted[i].c.Op < sorted[j].c.Op
 	})
+
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i-1].ver.Compare(sorted[i].ver) == 0 {
+			return nil, fmt.Errorf("vers: duplicate version %q: %w", sorted[i].c.Version, ErrContradictory)
+		}
+	}
 
 	for i, item := range items {
 		if item.ver.Compare(sorted[i].ver) != 0 || item.c.Op != sorted[i].c.Op {
@@ -289,17 +284,86 @@ func resolveType(typ string, eco ecosystem.Ecosystem) (string, error) {
 }
 
 func validateComparators(items []parsedItem) error {
-	inRange := false
+	for i := 0; i+1 < len(items); i++ {
+		if !validAdjacent(items[i].c.Op, items[i+1].c.Op) {
+			return fmt.Errorf("vers: contradictory comparator sequence: %w", ErrContradictory)
+		}
+	}
+
+	withoutNe := make([]Op, 0, len(items))
 	for _, item := range items {
-		switch item.c.Op {
-		case Ge, Gt:
-			if inRange {
+		if item.c.Op != Ne {
+			withoutNe = append(withoutNe, item.c.Op)
+		}
+	}
+
+	for i, op := range withoutNe {
+		if op != Eq {
+			continue
+		}
+		if i > 0 {
+			prev := withoutNe[i-1]
+			if prev == Gt || prev == Ge {
 				return fmt.Errorf("vers: contradictory comparator sequence: %w", ErrContradictory)
 			}
-			inRange = true
-		case Le, Lt:
-			inRange = false
+		}
+		if i+1 == len(withoutNe) {
+			continue
+		}
+		next := withoutNe[i+1]
+		if next != Eq && next != Gt && next != Ge {
+			return fmt.Errorf("vers: contradictory comparator sequence: %w", ErrContradictory)
+		}
+	}
+
+	withoutEqNe := make([]Op, 0, len(withoutNe))
+	for _, op := range withoutNe {
+		if op != Eq {
+			withoutEqNe = append(withoutEqNe, op)
+		}
+	}
+
+	for i, op := range withoutEqNe {
+		if i+1 == len(withoutEqNe) {
+			continue
+		}
+		next := withoutEqNe[i+1]
+		switch op {
+		case Lt, Le:
+			if next != Gt && next != Ge {
+				return fmt.Errorf("vers: contradictory comparator sequence: %w", ErrContradictory)
+			}
+		case Gt, Ge:
+			if next != Lt && next != Le {
+				return fmt.Errorf("vers: contradictory comparator sequence: %w", ErrContradictory)
+			}
 		}
 	}
 	return nil
+}
+
+func validAdjacent(current, next Op) bool {
+	switch current {
+	case Ne:
+		return true
+	case Eq, Lt, Le:
+		return next == Eq || next == Ne || next == Gt || next == Ge
+	case Gt, Ge:
+		return next == Ne || next == Lt || next == Le
+	default:
+		return false
+	}
+}
+
+func encodeVersionLiteral(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if strings.ContainsAny(string(c), "%<>=!*|") || c <= ' ' || c >= 0x7f {
+			fmt.Fprintf(&b, "%%%02X", c)
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }

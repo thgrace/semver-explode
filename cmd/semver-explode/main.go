@@ -27,7 +27,7 @@ func usageString() string {
   semver-explode <purl>              (purl must contain @version)
 
 range may be a native ecosystem expression or a vers: range, e.g.:
-  vers:npm/>=4.17.0|<5
+  vers:npm/>=4.17.0|<5.0.0
 
 ecosystems: %s
 
@@ -37,7 +37,7 @@ examples:
   semver-explode 'pkg:npm/lodash' '^4.17.0'
   semver-explode 'pkg:npm/lodash@4.17.21'
   semver-explode 'pkg:pypi/Django@4.2'
-  semver-explode 'pkg:npm/lodash' 'vers:npm/>=4.17.0|<5'
+  semver-explode 'pkg:npm/lodash' 'vers:npm/>=4.17.0|<5.0.0'
 `, strings.Join(ecosystem.Names(), ", "))
 }
 

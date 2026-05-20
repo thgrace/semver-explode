@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
+	"github.com/thgrace/semver-explode/pkg/npm"
+	"github.com/thgrace/semver-explode/pkg/pypi"
 )
 
 // fakeVersion is a simple lexicographic-order version for testing.
@@ -170,13 +172,11 @@ func TestParse_Error(t *testing.T) {
 		{"vers:npm/>=1.0||<2.0", "double '|'"},
 		{"vers:npm/*|>=1.0", "'*' cannot be mixed"},
 		{"vers:npm/>=", "empty version literal"},
-		{"vers:npm/>=1.0|>=1.0", "duplicate constraint"},
 		// Fix 4: double-equals operator.
 		{"vers:npm/==1.0.0", "malformed version literal"},
-		// Fix 4: percent-encoded comparator chars decode to >=.
-		{"vers:npm/%3E%3D1.0", "malformed version literal"},
 		// Fix 4: stacked operator prefix.
 		{"vers:npm/>=>=1.0", "malformed version literal"},
+		{"vers:NPM/>=1.0.0", "invalid type"},
 	}
 
 	for _, tc := range cases {
@@ -317,6 +317,103 @@ func TestBind_ContradictoryComparators(t *testing.T) {
 	// Fix 5: sentinel error.
 	if !errors.Is(err, ErrContradictory) {
 		t.Errorf("expected errors.Is(err, ErrContradictory), got %v", err)
+	}
+}
+
+func TestBind_DuplicateVersions(t *testing.T) {
+	cases := []struct {
+		name string
+		vers string
+		eco  ecosystem.Ecosystem
+	}{
+		{
+			name: "same version different comparator",
+			vers: "vers:npm/>=1.0.0|<1.0.0",
+			eco:  npm.New(),
+		},
+		{
+			name: "normalized npm version",
+			vers: "vers:npm/1.0.0|v1.0.0",
+			eco:  npm.New(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Parse(tc.vers)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", tc.vers, err)
+			}
+			_, err = r.Bind(tc.eco)
+			if err == nil {
+				t.Fatal("expected duplicate version error, got nil")
+			}
+			if !strings.Contains(err.Error(), "duplicate version") {
+				t.Errorf("error %q missing 'duplicate version'", err.Error())
+			}
+			if !errors.Is(err, ErrContradictory) {
+				t.Errorf("expected errors.Is(err, ErrContradictory), got %v", err)
+			}
+		})
+	}
+}
+
+func TestBind_InvalidComparatorAdjacency(t *testing.T) {
+	cases := []string{
+		"vers:npm/=1.0.0|<2.0.0",
+		"vers:npm/>=1.0.0|=2.0.0",
+		"vers:npm/>=1.0.0|!=1.5.0|=2.0.0",
+	}
+
+	for _, input := range cases {
+		t.Run(input, func(t *testing.T) {
+			r, err := Parse(input)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", input, err)
+			}
+			_, err = r.Bind(npm.New())
+			if err == nil {
+				t.Fatal("expected comparator adjacency error, got nil")
+			}
+			if !errors.Is(err, ErrContradictory) {
+				t.Errorf("expected errors.Is(err, ErrContradictory), got %v", err)
+			}
+		})
+	}
+}
+
+func TestBind_ValidComparatorAdjacency(t *testing.T) {
+	cases := []string{
+		"vers:npm/<1.0.0|=2.0.0",
+		"vers:npm/<1.0.0|!=1.5.0|=2.0.0",
+	}
+
+	for _, input := range cases {
+		t.Run(input, func(t *testing.T) {
+			r, err := Parse(input)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", input, err)
+			}
+			if _, err := r.Bind(npm.New()); err != nil {
+				t.Fatalf("Bind(%q): %v", input, err)
+			}
+		})
+	}
+}
+
+func TestBind_PyPIEpochVersion(t *testing.T) {
+	r, err := Parse("vers:pypi/>=1%214.0")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := r.Constraints[0].Version; got != "1!4.0" {
+		t.Fatalf("decoded version = %q, want %q", got, "1!4.0")
+	}
+	if got := r.String(); got != "vers:pypi/>=1%214.0" {
+		t.Fatalf("String() = %q, want %q", got, "vers:pypi/>=1%%214.0")
+	}
+	if _, err := r.Bind(pypi.New()); err != nil {
+		t.Fatalf("Bind: %v", err)
 	}
 }
 
