@@ -149,18 +149,24 @@ func TestParseRequest(t *testing.T) {
 		},
 		{
 			name:    "vers: in first position",
-			args:    []string{"vers:npm/lodash/>=1.0"},
-			wantErr: "vers: range syntax not yet supported",
+			args:    []string{"vers:npm/>=1.0"},
+			wantErr: "vers: range syntax is not a package selector",
 		},
 		{
-			name:    "vers: in second position",
-			args:    []string{"pkg:npm/lodash", "vers:npm/>=1.0"},
-			wantErr: "vers: range syntax not yet supported",
+			name:          "vers: in second position accepted",
+			args:          []string{"pkg:npm/lodash", "vers:npm/>=1.0.0"},
+			wantEco:       "npm",
+			wantPkg:       "lodash",
+			wantRangeExpr: "vers:npm/>=1.0.0",
+			wantMode:      requestModeRange,
 		},
 		{
-			name:    "vers: in second legacy position",
-			args:    []string{"npm", "lodash", "vers:npm/>=1.0"},
-			wantErr: "vers: range syntax not yet supported",
+			name:          "vers: in third position legacy accepted",
+			args:          []string{"npm", "lodash", "vers:npm/>=1.0.0"},
+			wantEco:       "npm",
+			wantPkg:       "lodash",
+			wantRangeExpr: "vers:npm/>=1.0.0",
+			wantMode:      requestModeRange,
 		},
 		{
 			name:    "unsupported purl type maven",
@@ -329,15 +335,92 @@ func TestRunWithDeps_UnknownEcosystem(t *testing.T) {
 	}
 }
 
-func TestRunWithDeps_VersRejected(t *testing.T) {
+func TestRunWithDeps_VersSlot0Rejected(t *testing.T) {
 	m, _ := newFakeSetup()
 	var stdout, stderr bytes.Buffer
-	err := runWithDeps([]string{"vers:npm/lodash/>=1.0"}, &stdout, &stderr, fakeLookup(m))
+	err := runWithDeps([]string{"vers:npm/>=1.0"}, &stdout, &stderr, fakeLookup(m))
 	if err == nil {
-		t.Fatal("expected error for vers: prefix, got nil")
+		t.Fatal("expected error for vers: in slot 0, got nil")
 	}
-	if !strings.Contains(err.Error(), "vers: range syntax not yet supported") {
+	if !strings.Contains(err.Error(), "vers: range syntax is not a package selector") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRunWithDeps_VersRange_PurlSlot0(t *testing.T) {
+	reg := &fakeRegistry{versions: []ecosystem.Version{
+		fakeVersion{"1.0.0"},
+		fakeVersion{"2.0.0"},
+		fakeVersion{"3.0.0"},
+	}}
+	eco := &fakeEco{name: "npm", registry: reg}
+	m := map[string]ecosystem.Ecosystem{"npm": eco}
+	var stdout, stderr bytes.Buffer
+	err := runWithDeps([]string{"pkg:npm/lodash", "vers:npm/>=1.0.0|<3.0.0"}, &stdout, &stderr, fakeLookup(m))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), stdout.String())
+	}
+	if lines[0] != "1.0.0" || lines[1] != "2.0.0" {
+		t.Errorf("unexpected output: %v", lines)
+	}
+}
+
+func TestRunWithDeps_VersRange_Legacy(t *testing.T) {
+	reg := &fakeRegistry{versions: []ecosystem.Version{
+		fakeVersion{"1.0.0"},
+		fakeVersion{"2.0.0"},
+		fakeVersion{"3.0.0"},
+	}}
+	eco := &fakeEco{name: "npm", registry: reg}
+	m := map[string]ecosystem.Ecosystem{"npm": eco}
+	var stdout, stderr bytes.Buffer
+	err := runWithDeps([]string{"npm", "lodash", "vers:npm/>=2.0.0"}, &stdout, &stderr, fakeLookup(m))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), stdout.String())
+	}
+	if lines[0] != "2.0.0" || lines[1] != "3.0.0" {
+		t.Errorf("unexpected output: %v", lines)
+	}
+}
+
+func TestRunWithDeps_VersRange_TypeMismatch(t *testing.T) {
+	reg := &fakeRegistry{versions: []ecosystem.Version{fakeVersion{"1.0.0"}}}
+	eco := &fakeEco{name: "npm", registry: reg}
+	m := map[string]ecosystem.Ecosystem{"npm": eco}
+	var stdout, stderr bytes.Buffer
+	err := runWithDeps([]string{"pkg:npm/lodash", "vers:pypi/>=1.0.0"}, &stdout, &stderr, fakeLookup(m))
+	if err == nil {
+		t.Fatal("expected error for vers type mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not match ecosystem") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRunWithDeps_VersStar(t *testing.T) {
+	reg := &fakeRegistry{versions: []ecosystem.Version{
+		fakeVersion{"1.0.0"},
+		fakeVersion{"2.0.0"},
+		fakeVersion{"3.0.0"},
+	}}
+	eco := &fakeEco{name: "npm", registry: reg}
+	m := map[string]ecosystem.Ecosystem{"npm": eco}
+	var stdout, stderr bytes.Buffer
+	err := runWithDeps([]string{"pkg:npm/lodash", "vers:npm/*"}, &stdout, &stderr, fakeLookup(m))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines (star matches all), got %d: %q", len(lines), stdout.String())
 	}
 }
 

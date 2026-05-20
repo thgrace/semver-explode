@@ -14,6 +14,7 @@ import (
 	_ "github.com/thgrace/semver-explode/pkg/ecosystem/all"
 	"github.com/thgrace/semver-explode/pkg/purl"
 	"github.com/thgrace/semver-explode/pkg/resolve"
+	"github.com/thgrace/semver-explode/pkg/vers"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=..."
@@ -25,6 +26,9 @@ func usageString() string {
   semver-explode <purl> <range>
   semver-explode <purl>              (purl must contain @version)
 
+range may be a native ecosystem expression or a vers: range, e.g.:
+  vers:npm/>=4.17.0|<5
+
 ecosystems: %s
 
 examples:
@@ -33,6 +37,7 @@ examples:
   semver-explode 'pkg:npm/lodash' '^4.17.0'
   semver-explode 'pkg:npm/lodash@4.17.21'
   semver-explode 'pkg:pypi/Django@4.2'
+  semver-explode 'pkg:npm/lodash' 'vers:npm/>=4.17.0|<5'
 `, strings.Join(ecosystem.Names(), ", "))
 }
 
@@ -54,13 +59,6 @@ const (
 func parseRequest(args []string) (request, error) {
 	if len(args) == 0 {
 		return request{}, fmt.Errorf("expected arguments, got 0")
-	}
-
-	// Pre-check any non-first arg for vers: prefix.
-	for _, a := range args[1:] {
-		if strings.HasPrefix(a, "vers:") {
-			return request{}, fmt.Errorf("vers: range syntax not yet supported")
-		}
 	}
 
 	first := args[0]
@@ -96,7 +94,7 @@ func parseRequest(args []string) (request, error) {
 	}
 
 	if strings.HasPrefix(first, "vers:") {
-		return request{}, fmt.Errorf("vers: range syntax not yet supported")
+		return request{}, fmt.Errorf("vers: range syntax is not a package selector")
 	}
 
 	if len(args) == 3 {
@@ -139,9 +137,22 @@ func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (e
 
 	switch req.mode {
 	case requestModeRange:
-		rng, err := eco.ParseRange(req.rangeExpr)
-		if err != nil {
-			return fmt.Errorf("parse range: %w", err)
+		var rng ecosystem.Range
+		if strings.HasPrefix(req.rangeExpr, "vers:") {
+			vr, err := vers.Parse(req.rangeExpr)
+			if err != nil {
+				return fmt.Errorf("parse vers range: %w", err)
+			}
+			rng, err = vr.Bind(eco)
+			if err != nil {
+				return fmt.Errorf("bind vers range: %w", err)
+			}
+		} else {
+			var err error
+			rng, err = eco.ParseRange(req.rangeExpr)
+			if err != nil {
+				return fmt.Errorf("parse range: %w", err)
+			}
 		}
 		versions, err := eco.Registry().ListVersions(ctx, req.pkgName)
 		if err != nil {
