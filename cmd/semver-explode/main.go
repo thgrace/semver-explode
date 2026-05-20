@@ -12,6 +12,9 @@ import (
 	"github.com/thgrace/semver-explode/pkg/pypi"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=..."
+var Version = "dev"
+
 const usage = `usage: semver-explode <ecosystem> <package> <range>
 
 ecosystems: npm, pypi
@@ -29,6 +32,10 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) == 1 && (args[0] == "-v" || args[0] == "--version") {
+		fmt.Println(Version)
+		return nil
+	}
 	if len(args) != 3 {
 		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("expected 3 arguments, got %d", len(args))
