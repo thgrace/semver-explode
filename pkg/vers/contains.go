@@ -26,10 +26,18 @@ func (br *boundRange) String() string {
 
 // Contains implements the pairwise-walk algorithm from the vers spec.
 //
-// The constraints are already sorted by version. We walk them in order,
-// tracking whether v falls inside an open interval. Comparators Ge/Gt open
-// an interval; Le/Lt close one. Eq/Ne are point-in / point-out tests that
-// short-circuit.
+// Steps:
+//  1. Star → true.
+//  2. Empty → false.
+//  3. Walk all constraints: handle exact-version matches for each operator.
+//     Eq exact → true. Ne exact → false.
+//     Le/Ge exact → true (inclusive boundary). Lt/Gt exact → false (exclusive boundary).
+//  4. Find prevIdx (largest i with Compare(versions[i], v) < 0, skipping Ne) and
+//     nextIdx (smallest i with Compare(versions[i], v) > 0, skipping Ne).
+//  5. If no non-Ne bounding constraints exist → true (unbounded, no exclusion hit in step 3).
+//  6. If prevIdx == -1: v is below all bounding constraints; return next == Lt || next == Le.
+//  7. If nextIdx == len: v is above all bounding constraints; return prev == Gt || prev == Ge.
+//  8. Otherwise: return (prev == Gt || prev == Ge) && (next == Lt || next == Le).
 func (br *boundRange) Contains(v ecosystem.Version) bool {
 	if br.star {
 		return true
@@ -38,40 +46,64 @@ func (br *boundRange) Contains(v ecosystem.Version) bool {
 		return false
 	}
 
-	inRange := false
+	// Step 3: exact-version short-circuits for all operators.
+	hasBoundingConstraint := false
 	for i, c := range br.constraints {
-		pv := br.versions[i]
-		cmp := v.Compare(pv)
-
+		cmp := v.Compare(br.versions[i])
+		if cmp != 0 {
+			if c.Op != Ne {
+				hasBoundingConstraint = true
+			}
+			continue
+		}
+		// cmp == 0
 		switch c.Op {
-		case Eq:
-			if cmp == 0 {
-				return true
-			}
+		case Eq, Le, Ge:
+			return true
 		case Ne:
-			if cmp == 0 {
-				return false
-			}
-		case Ge:
-			if cmp >= 0 {
-				inRange = true
-			}
-		case Gt:
-			if cmp > 0 {
-				inRange = true
-			}
-		case Le:
-			if inRange && cmp <= 0 {
-				return true
-			}
-			inRange = false
-		case Lt:
-			if inRange && cmp < 0 {
-				return true
-			}
-			inRange = false
+			return false
+		case Lt, Gt:
+			return false
 		}
 	}
 
-	return inRange
+	// If all constraints were Ne and none matched, v is in the open set.
+	if !hasBoundingConstraint {
+		return true
+	}
+
+	// Steps 4–8: neighbor search (skip Ne constraints; cmp==0 already handled above).
+	prevIdx := -1
+	nextIdx := len(br.constraints)
+
+	for i, c := range br.constraints {
+		if c.Op == Ne {
+			continue
+		}
+		cmp := v.Compare(br.versions[i])
+		if cmp > 0 {
+			prevIdx = i
+		} else if cmp < 0 && i < nextIdx {
+			nextIdx = i
+		}
+	}
+
+	switch {
+	case prevIdx == -1 && nextIdx == len(br.constraints):
+		// Only Ne constraints (already handled) or truly empty bounding set.
+		return false
+	case prevIdx == -1:
+		// v is below all bounding constraints.
+		next := br.constraints[nextIdx].Op
+		return next == Lt || next == Le
+	case nextIdx == len(br.constraints):
+		// v is above all bounding constraints.
+		prev := br.constraints[prevIdx].Op
+		return prev == Gt || prev == Ge
+	default:
+		// v is strictly between two bounding constraints.
+		prev := br.constraints[prevIdx].Op
+		next := br.constraints[nextIdx].Op
+		return (prev == Gt || prev == Ge) && (next == Lt || next == Le)
+	}
 }

@@ -2,6 +2,7 @@ package vers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -160,12 +161,22 @@ func TestParse_Error(t *testing.T) {
 		{"vers:npm/", "empty constraints"},
 		{"vers:n+pm/>=1.0", "invalid type"},
 		{"vers:npm/>=1.0 |<2", "whitespace"},
+		// Fix 3: Unicode no-break space (U+00A0) must be rejected.
+		{"vers:npm/>=1.0 |<2", "whitespace"},
+		// Fix 3: ideographic space (U+3000) must be rejected.
+		{"vers:npm/>=1.0　|<2", "whitespace"},
 		{"vers:npm/|>=1.0", "leading '|'"},
 		{"vers:npm/>=1.0|", "trailing '|'"},
 		{"vers:npm/>=1.0||<2.0", "double '|'"},
 		{"vers:npm/*|>=1.0", "'*' cannot be mixed"},
 		{"vers:npm/>=", "empty version literal"},
 		{"vers:npm/>=1.0|>=1.0", "duplicate constraint"},
+		// Fix 4: double-equals operator.
+		{"vers:npm/==1.0.0", "malformed version literal"},
+		// Fix 4: percent-encoded comparator chars decode to >=.
+		{"vers:npm/%3E%3D1.0", "malformed version literal"},
+		// Fix 4: stacked operator prefix.
+		{"vers:npm/>=>=1.0", "malformed version literal"},
 	}
 
 	for _, tc := range cases {
@@ -262,6 +273,10 @@ func TestBind_TypeMismatch(t *testing.T) {
 	if !strings.Contains(err.Error(), "does not match ecosystem") {
 		t.Errorf("error %q missing expected message", err.Error())
 	}
+	// Fix 5: sentinel error.
+	if !errors.Is(err, ErrTypeMismatch) {
+		t.Errorf("expected errors.Is(err, ErrTypeMismatch), got %v", err)
+	}
 }
 
 func TestBind_NonCanonicalOrder(t *testing.T) {
@@ -279,6 +294,10 @@ func TestBind_NonCanonicalOrder(t *testing.T) {
 	if !strings.Contains(err.Error(), "canonical order") {
 		t.Errorf("error %q missing 'canonical order'", err.Error())
 	}
+	// Fix 5: sentinel error.
+	if !errors.Is(err, ErrNonCanonical) {
+		t.Errorf("expected errors.Is(err, ErrNonCanonical), got %v", err)
+	}
 }
 
 func TestBind_ContradictoryComparators(t *testing.T) {
@@ -294,6 +313,35 @@ func TestBind_ContradictoryComparators(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "contradictory") {
 		t.Errorf("error %q missing 'contradictory'", err.Error())
+	}
+	// Fix 5: sentinel error.
+	if !errors.Is(err, ErrContradictory) {
+		t.Errorf("expected errors.Is(err, ErrContradictory), got %v", err)
+	}
+}
+
+// Fix 6: alias whose target ecosystem is not registered must return ErrUnsupportedType.
+// We inject a temporary alias entry pointing at a name that is not registered
+// in the global ecosystem registry, then bind it against a *different* fake eco
+// so the alias code path (not the direct-name path) is exercised.
+func TestBind_AliasTargetNotRegistered(t *testing.T) {
+	typeAliases["fakealiasXYZ"] = "unregistered-eco-XYZ"
+	defer delete(typeAliases, "fakealiasXYZ")
+
+	// eco.Name() is "npm" — doesn't match the alias target "unregistered-eco-XYZ",
+	// so resolveType will attempt Lookup("unregistered-eco-XYZ"), which fails,
+	// and returns ErrUnsupportedType.
+	r := Range{
+		Type:        "fakealiasXYZ",
+		Constraints: []Constraint{{Op: Ge, Version: "1.0.0"}},
+	}
+	eco := &fakeEco{name: "npm"}
+	_, err := r.Bind(eco)
+	if err == nil {
+		t.Fatal("expected error for unregistered alias target, got nil")
+	}
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("expected errors.Is(err, ErrUnsupportedType), got %v", err)
 	}
 }
 
@@ -316,10 +364,29 @@ func TestContains(t *testing.T) {
 		{"eq exact match", "vers:npm/1.0.0", "1.0.0", true},
 		{"eq no match", "vers:npm/1.0.0", "1.0.1", false},
 		{"ne excludes", "vers:npm/!=1.0.0", "1.0.0", false},
-		{"ne allows others", "vers:npm/!=1.0.0", "1.0.1", false},
+		// Fix 2: lone != should pass versions that don't match.
+		{"ne allows others", "vers:npm/!=1.0.0", "1.0.1", true},
 		{"ge open ended", "vers:npm/>=1.0.0", "5.0.0", true},
 		{"ge open below", "vers:npm/>=1.0.0", "0.9.0", false},
-		{"le open ended", "vers:npm/<=2.0.0", "1.0.0", false},
+		// Fix 2: lone <= and < should match versions below the bound.
+		{"le open ended", "vers:npm/<=2.0.0", "1.0.0", true},
+		{"lt below bound", "vers:npm/<2.0.0", "1.0.0", true},
+
+		// Additional cases (Fix 2).
+		{"ne exact", "vers:npm/!=1.0.0", "1.0.0", false},
+		{"lt below", "vers:npm/<1.0.0", "0.5.0", true},
+		{"lt at bound", "vers:npm/<1.0.0", "1.0.0", false},
+		{"gt at bound", "vers:npm/>1.0.0", "1.0.0", false},
+		{"gt above", "vers:npm/>1.0.0", "2.0.0", true},
+
+		// Disjoint union: >=1|<2|>=3|<4
+		{"disjoint union first band", "vers:npm/>=1|<2|>=3|<4", "1.5.0", true},
+		{"disjoint union gap", "vers:npm/>=1|<2|>=3|<4", "2.5.0", false},
+		{"disjoint union second band", "vers:npm/>=1|<2|>=3|<4", "3.5.0", true},
+
+		// Discrete equality list.
+		{"eq list match first", "vers:npm/=1.0.0|=2.0.0", "1.0.0", true},
+		{"eq list no match mid", "vers:npm/=1.0.0|=2.0.0", "1.5.0", false},
 	}
 
 	for _, tc := range cases {

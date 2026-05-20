@@ -1,13 +1,23 @@
 package vers
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/thgrace/semver-explode/pkg/ecosystem"
+)
+
+// Sentinel errors returned by Parse and Bind.
+var (
+	ErrUnsupportedType = errors.New("vers: unsupported type")
+	ErrTypeMismatch    = errors.New("vers: type does not match ecosystem")
+	ErrNonCanonical    = errors.New("vers: constraints not in canonical order")
+	ErrContradictory   = errors.New("vers: contradictory comparator sequence")
 )
 
 type Range struct {
@@ -32,7 +42,7 @@ const (
 	Star
 )
 
-var typeRe = regexp.MustCompile(`^[a-z][a-z0-9.\-]*$`)
+var typeRe = regexp.MustCompile(`^[a-z][a-z0-9.-]*$`)
 
 var typeAliases = map[string]string{
 	"golang": "go",
@@ -64,8 +74,9 @@ func Parse(s string) (Range, error) {
 		return Range{}, fmt.Errorf("vers: invalid type %q", typ)
 	}
 
+	// Fix 3: reject any Unicode whitespace in constraints.
 	for _, ch := range constraints {
-		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+		if unicode.IsSpace(ch) {
 			return Range{}, fmt.Errorf("vers: whitespace in constraints")
 		}
 	}
@@ -99,13 +110,13 @@ func Parse(s string) (Range, error) {
 		}
 	}
 
-	seen := map[string]bool{}
+	// Fix 7: use map[Constraint]bool (Constraint is comparable).
+	seen := map[Constraint]bool{}
 	for _, c := range parsed {
-		key := fmt.Sprintf("%d:%s", c.Op, c.Version)
-		if seen[key] {
-			return Range{}, fmt.Errorf("vers: duplicate constraint %q", key)
+		if seen[c] {
+			return Range{}, fmt.Errorf("vers: duplicate constraint %q", opString(c.Op)+c.Version)
 		}
-		seen[key] = true
+		seen[c] = true
 	}
 
 	return Range{Type: typ, Constraints: parsed}, nil
@@ -151,6 +162,11 @@ func parseConstraint(s string) (Constraint, error) {
 		return Constraint{}, fmt.Errorf("vers: empty version literal")
 	}
 
+	// Fix 4: reject version literals that contain comparator characters.
+	if strings.IndexAny(decoded, "<>=!") >= 0 {
+		return Constraint{}, fmt.Errorf("vers: malformed version literal %q (contains comparator characters)", decoded)
+	}
+
 	return Constraint{Op: op, Version: decoded}, nil
 }
 
@@ -192,9 +208,12 @@ type parsedItem struct {
 }
 
 func (r Range) Bind(eco ecosystem.Ecosystem) (ecosystem.Range, error) {
-	resolved := resolveType(r.Type, eco)
+	resolved, err := resolveType(r.Type, eco)
+	if err != nil {
+		return nil, err
+	}
 	if resolved != eco.Name() {
-		return nil, fmt.Errorf("vers: type %q does not match ecosystem %q", r.Type, eco.Name())
+		return nil, fmt.Errorf("vers: type %q does not match ecosystem %q: %w", r.Type, eco.Name(), ErrTypeMismatch)
 	}
 
 	if len(r.Constraints) == 0 {
@@ -225,7 +244,7 @@ func (r Range) Bind(eco ecosystem.Ecosystem) (ecosystem.Range, error) {
 
 	for i, item := range items {
 		if item.ver.Compare(sorted[i].ver) != 0 || item.c.Op != sorted[i].c.Op {
-			return nil, fmt.Errorf("vers: constraints are not in canonical order")
+			return nil, fmt.Errorf("vers: constraints are not in canonical order: %w", ErrNonCanonical)
 		}
 	}
 
@@ -247,14 +266,26 @@ func (r Range) Bind(eco ecosystem.Ecosystem) (ecosystem.Range, error) {
 	}, nil
 }
 
-func resolveType(typ string, eco ecosystem.Ecosystem) string {
+// resolveType returns the canonical ecosystem name for typ, or an error if the
+// type is an alias whose target is not registered in the global ecosystem registry.
+// Fix 6: alias target registration check — only applies when the alias target
+// does not equal eco.Name() (i.e. we can't rely on eco itself as proof of registration).
+func resolveType(typ string, eco ecosystem.Ecosystem) (string, error) {
 	if typ == eco.Name() {
-		return eco.Name()
+		return eco.Name(), nil
 	}
-	if alias, ok := typeAliases[typ]; ok && alias == eco.Name() {
-		return eco.Name()
+	if alias, ok := typeAliases[typ]; ok {
+		if alias == eco.Name() {
+			// The ecosystem we are binding against IS the alias target — it's
+			// registered by definition.
+			return eco.Name(), nil
+		}
+		// Fix 6: alias target differs from eco; verify it is registered.
+		if _, registered := ecosystem.Lookup(alias); !registered {
+			return "", fmt.Errorf("vers: unsupported type %q (alias target %q not registered): %w", typ, alias, ErrUnsupportedType)
+		}
 	}
-	return typ
+	return typ, nil
 }
 
 func validateComparators(items []parsedItem) error {
@@ -263,7 +294,7 @@ func validateComparators(items []parsedItem) error {
 		switch item.c.Op {
 		case Ge, Gt:
 			if inRange {
-				return fmt.Errorf("vers: contradictory comparator sequence")
+				return fmt.Errorf("vers: contradictory comparator sequence: %w", ErrContradictory)
 			}
 			inRange = true
 		case Le, Lt:
