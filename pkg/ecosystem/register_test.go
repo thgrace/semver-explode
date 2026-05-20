@@ -8,7 +8,7 @@ import (
 // stubEco is a minimal Ecosystem used only in tests.
 type stubEco struct{ id string }
 
-func (s *stubEco) Name() string                          { return s.id }
+func (s *stubEco) Name() string                         { return s.id }
 func (s *stubEco) ParseVersion(string) (Version, error) { return nil, errors.New("stub") }
 func (s *stubEco) ParseRange(string) (Range, error)     { return nil, errors.New("stub") }
 func (s *stubEco) Registry() Registry                   { return nil }
