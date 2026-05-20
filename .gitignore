@@ -24,8 +24,7 @@ go.work.sum
 *.swo
 .DS_Store
 
-# Excluded for now
 _reference/
 Makefile
-plan.md
+docs/
 README.md
