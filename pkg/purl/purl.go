@@ -29,8 +29,10 @@ func Parse(s string) (PURL, error) {
 
 	// Step 2: strip subpath (#), qualifiers (?), version (last @).
 	var subpath, qualRaw, version string
+	var hasSubpath bool
 
 	if idx := strings.IndexByte(s, '#'); idx >= 0 {
+		hasSubpath = true
 		subpath = s[idx+1:]
 		s = s[:idx]
 	}
@@ -83,6 +85,9 @@ func Parse(s string) (PURL, error) {
 		if dec == "" {
 			return PURL{}, fmt.Errorf("purl: empty namespace segment after decoding")
 		}
+		if strings.Contains(dec, "/") {
+			return PURL{}, fmt.Errorf("purl: namespace segment contains '/' after decoding")
+		}
 		decodedNS = append(decodedNS, dec)
 	}
 	namespace := strings.Join(decodedNS, "/")
@@ -94,6 +99,9 @@ func Parse(s string) (PURL, error) {
 	if decodedName == "" {
 		return PURL{}, fmt.Errorf("purl: empty name")
 	}
+	if strings.Contains(decodedName, "/") {
+		return PURL{}, fmt.Errorf("purl: name contains '/' after decoding")
+	}
 
 	var decodedVersion string
 	if version != "" {
@@ -104,10 +112,10 @@ func Parse(s string) (PURL, error) {
 	}
 
 	var decodedSubpath string
-	if subpath != "" {
-		decodedSubpath, err = url.PathUnescape(subpath)
+	if hasSubpath {
+		decodedSubpath, err = decodeSubpath(subpath)
 		if err != nil {
-			return PURL{}, fmt.Errorf("purl: malformed percent-encoding in subpath: %w", err)
+			return PURL{}, err
 		}
 	}
 
@@ -192,4 +200,30 @@ func pypiPackageName(p PURL) (string, error) {
 	normalized := strings.ToLower(p.Name)
 	normalized = pypiNormRe.ReplaceAllString(normalized, "-")
 	return normalized, nil
+}
+
+func decodeSubpath(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("purl: empty subpath segment")
+	}
+
+	segments := strings.Split(raw, "/")
+	decoded := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg == "" {
+			return "", fmt.Errorf("purl: empty subpath segment")
+		}
+		dec, err := url.PathUnescape(seg)
+		if err != nil {
+			return "", fmt.Errorf("purl: malformed percent-encoding in subpath: %w", err)
+		}
+		if dec == "." || dec == ".." {
+			return "", fmt.Errorf("purl: invalid subpath segment %q", dec)
+		}
+		if strings.Contains(dec, "/") {
+			return "", fmt.Errorf("purl: subpath segment contains '/' after decoding")
+		}
+		decoded = append(decoded, dec)
+	}
+	return strings.Join(decoded, "/"), nil
 }

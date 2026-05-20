@@ -87,6 +87,7 @@ func TestParseRequest(t *testing.T) {
 		wantPkg        string
 		wantRangeExpr  string
 		wantPinVersion string
+		wantMode       requestMode
 	}
 
 	cases := []tc{
@@ -96,6 +97,7 @@ func TestParseRequest(t *testing.T) {
 			wantEco:       "npm",
 			wantPkg:       "lodash",
 			wantRangeExpr: "^4.17.0",
+			wantMode:      requestModeRange,
 		},
 		{
 			name:          "purl no version with range arg",
@@ -103,6 +105,21 @@ func TestParseRequest(t *testing.T) {
 			wantEco:       "npm",
 			wantPkg:       "lodash",
 			wantRangeExpr: "^4.17.0",
+			wantMode:      requestModeRange,
+		},
+		{
+			name:     "legacy empty range",
+			args:     []string{"npm", "lodash", ""},
+			wantEco:  "npm",
+			wantPkg:  "lodash",
+			wantMode: requestModeRange,
+		},
+		{
+			name:     "purl empty range arg",
+			args:     []string{"pkg:npm/lodash", ""},
+			wantEco:  "npm",
+			wantPkg:  "lodash",
+			wantMode: requestModeRange,
 		},
 		{
 			name:           "purl with @version pin",
@@ -110,6 +127,7 @@ func TestParseRequest(t *testing.T) {
 			wantEco:        "npm",
 			wantPkg:        "lodash",
 			wantPinVersion: "4.17.21",
+			wantMode:       requestModePin,
 		},
 		{
 			name:           "purl pypi pin",
@@ -117,6 +135,7 @@ func TestParseRequest(t *testing.T) {
 			wantEco:        "pypi",
 			wantPkg:        "django",
 			wantPinVersion: "4.2",
+			wantMode:       requestModePin,
 		},
 		{
 			name:    "purl with @version and extra range arg",
@@ -197,6 +216,9 @@ func TestParseRequest(t *testing.T) {
 			if tc.wantPinVersion != "" && req.pinVersion != tc.wantPinVersion {
 				t.Errorf("pinVersion: got %q, want %q", req.pinVersion, tc.wantPinVersion)
 			}
+			if req.mode != tc.wantMode {
+				t.Errorf("mode: got %d, want %d", req.mode, tc.wantMode)
+			}
 		})
 	}
 }
@@ -245,6 +267,25 @@ func TestRunWithDeps_PurlRangeMode(t *testing.T) {
 	lines := strings.Split(got, "\n")
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d: %q", len(lines), got)
+	}
+}
+
+func TestRunWithDeps_EmptyRangeMode(t *testing.T) {
+	m, _ := newFakeSetup()
+	for _, args := range [][]string{
+		{"npm", "lodash", ""},
+		{"pkg:npm/lodash", ""},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := runWithDeps(args, &stdout, &stderr, fakeLookup(m))
+		if err != nil {
+			t.Fatalf("%v: unexpected error: %v", args, err)
+		}
+		got := strings.TrimSpace(stdout.String())
+		lines := strings.Split(got, "\n")
+		if len(lines) != 2 {
+			t.Fatalf("%v: expected 2 lines, got %d: %q", args, len(lines), got)
+		}
 	}
 }
 

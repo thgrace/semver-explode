@@ -41,7 +41,15 @@ type request struct {
 	pkgName    string
 	rangeExpr  string
 	pinVersion string
+	mode       requestMode
 }
+
+type requestMode int
+
+const (
+	requestModeRange requestMode = iota
+	requestModePin
+)
 
 func parseRequest(args []string) (request, error) {
 	if len(args) == 0 {
@@ -75,13 +83,13 @@ func parseRequest(args []string) (request, error) {
 			if p.Version == "" {
 				return request{}, fmt.Errorf("purl has no @version; provide a range argument or pin a version with @version")
 			}
-			return request{ecoName: ecoName, pkgName: pkgName, pinVersion: p.Version}, nil
+			return request{ecoName: ecoName, pkgName: pkgName, pinVersion: p.Version, mode: requestModePin}, nil
 		case 2:
 			rangeExpr := args[1]
 			if p.Version != "" {
 				return request{}, fmt.Errorf("version pin and range both given")
 			}
-			return request{ecoName: ecoName, pkgName: pkgName, rangeExpr: rangeExpr}, nil
+			return request{ecoName: ecoName, pkgName: pkgName, rangeExpr: rangeExpr, mode: requestModeRange}, nil
 		default:
 			return request{}, fmt.Errorf("too many arguments")
 		}
@@ -92,7 +100,7 @@ func parseRequest(args []string) (request, error) {
 	}
 
 	if len(args) == 3 {
-		return request{ecoName: args[0], pkgName: args[1], rangeExpr: args[2]}, nil
+		return request{ecoName: args[0], pkgName: args[1], rangeExpr: args[2], mode: requestModeRange}, nil
 	}
 
 	return request{}, fmt.Errorf("expected 3 arguments, got %d", len(args))
@@ -129,7 +137,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (e
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if req.rangeExpr != "" {
+	switch req.mode {
+	case requestModeRange:
 		rng, err := eco.ParseRange(req.rangeExpr)
 		if err != nil {
 			return fmt.Errorf("parse range: %w", err)
@@ -143,7 +152,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (e
 				fmt.Fprintln(stdout, v.String())
 			}
 		}
-	} else {
+	case requestModePin:
 		v, err := resolve.ResolveExact(ctx, eco, req.pkgName, req.pinVersion)
 		if err != nil {
 			if errors.Is(err, resolve.ErrVersionNotFound) {
@@ -152,6 +161,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, lookup func(string) (e
 			return err
 		}
 		fmt.Fprintln(stdout, v.String())
+	default:
+		return fmt.Errorf("internal error: unknown request mode %d", req.mode)
 	}
 
 	return nil

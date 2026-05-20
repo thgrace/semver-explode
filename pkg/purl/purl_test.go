@@ -147,6 +147,26 @@ var errorCases = []errorCase{
 		input:       "pkg:npm/lodash%ZZbad",
 		errContains: "malformed percent-encoding",
 	},
+	{
+		input:       "pkg:npm/%40scope%2Fnested/pkg",
+		errContains: "namespace segment contains '/'",
+	},
+	{
+		input:       "pkg:npm/lodash%2Ffp",
+		errContains: "name contains '/'",
+	},
+	{
+		input:       "pkg:npm/lodash#dist//index.js",
+		errContains: "empty subpath segment",
+	},
+	{
+		input:       "pkg:npm/lodash#dist/%2Findex.js",
+		errContains: "subpath segment contains '/'",
+	},
+	{
+		input:       "pkg:npm/lodash#dist/..",
+		errContains: "invalid subpath segment",
+	},
 }
 
 func TestParse_Errors(t *testing.T) {
